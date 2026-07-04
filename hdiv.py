@@ -7,7 +7,7 @@ import sys
 
 # parameters 
 output = True
-ic = os.environ.get("IC", "hopf")  # hopf, E3, or E3-positive
+ic = os.environ.get("IC", "E3")  # hopf, E3, or E3-positive
 is_e3 = ic in ("E3", "E3-positive")
 bc = "closed" # closed or periodic
 scheme_name = "hdiv"
@@ -65,6 +65,10 @@ Vc = FunctionSpace(mesh, "NCE", order)
 Vd = FunctionSpace(mesh, "NCF", order)
 Vn = FunctionSpace(mesh, "DQ", order-1)
 
+# The E3 unknown is the perturbation B_p around the fixed unit guide field.
+guide_field = (as_vector([0.0, 0.0, 1.0]) if is_e3
+               else as_vector([0.0, 0.0, 0.0]))
+
 # Mixed unknowns: [B, j, u, E]
 Z = MixedFunctionSpace([Vd, Vc, Vc])
 z = Function(Z)
@@ -74,6 +78,7 @@ z = Function(Z)
 z_prev = Function(Z)
 (Bp, jp, Ep) = split(z_prev)
 B_avg = (B + Bp)/2
+B_total_avg = B_avg + guide_field
 E_avg = E
 j_avg = j
 eps = 1e-5
@@ -86,7 +91,7 @@ F = (
     # E
     + inner(E_avg, Et) * dx
     #+ tau * inner(cross(cross(j_avg, B_avg), B_avg)/(dot(Bp, Bp) + eps), Et) * dx
-    + tau * inner(cross(cross(j_avg, B_avg), B_avg), Et) * dx
+    + tau * inner(cross(cross(j_avg, B_total_avg), B_total_avg), Et) * dx
 )
 
 bcs = [DirichletBC(Z.sub(index), 0, subdomain) for index in range(len(Z)) for subdomain in dirichlet_ids]
@@ -143,6 +148,7 @@ elif is_e3:
 
     
     B_init = as_vector([B_x, B_y, B_z]) - B_b
+
 
 (B_, j_, E_) = z.subfunctions
 B_.rename("MagneticField")
@@ -287,7 +293,10 @@ def compute_helicity_energy(B):
     diff_ = Function(Vd, name="CurlAMinusB")
     diff_.project(B-curlA)
     # VTKFile(f"{output_dir}/magnetic_potential.pvd").write(curlA, diff_, A_)
-    if bc=="closed":
+    if is_e3:
+        return (assemble(inner(A, B + 2 * guide_field)*dx), diff, diff_,
+                assemble(inner(B + guide_field, B + guide_field) * dx))
+    elif bc=="closed":
         return assemble(inner(A, B)*dx), diff, diff_, assemble(inner(B, B) * dx)
     else: 
         return assemble(inner(A, B + diff_)*dx), diff, diff_, assemble(inner(B - diff_, B-diff_) * dx)
@@ -299,10 +308,15 @@ def compute_Bn(B):
 def compute_divB(B):
     return norm(div(B), "L2")
 
+def compute_free_energy(B):
+    """Energy above the fixed E3 guide field (B is the perturbation)."""
+    return assemble(inner(B, B) * dx)
+
 # monitor of (non)linear force-free field
 def compute_lamb(j, B):
     eps = 1e-10
-    lamb = Function(Vg_).interpolate(dot(j, B)/(dot(B, B) + eps))
+    B_total = B + guide_field
+    lamb = Function(Vg_).interpolate(dot(j, B_total)/(dot(B_total, B_total) + eps))
     with lamb.dat.vec_ro as v:
         _, max_val = v.max()
         _, min_val = v.min()
@@ -314,7 +328,8 @@ def compute_lamb(j, B):
 # monitor of force-free
 def compute_xi_max(j, B):
     eps = 1e-10
-    xi = Function(Vg).interpolate(cross(j, B)/(dot(B, B) + eps))
+    B_total = B + guide_field
+    xi = Function(Vg).interpolate(cross(j, B_total)/(dot(B_total, B_total) + eps))
     with xi.dat.vec_ro as v:
         _, max_val = v.max()
         _, min_val = v.min()
@@ -374,13 +389,14 @@ write_params(f"{output_dir}/param.txt", {
 }, header="hdiv.py")
 
 data_filename = f"{output_dir}/data.csv"
-fieldnames = ["t", "helicity", "energy", "divB", "lamb", "xi"]
+fieldnames = ["t", "helicity", "energy", "free_energy", "divB", "lamb", "xi"]
 if mesh.comm.rank == 0:
     with open(data_filename, "w") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
 
 helicity, diff, diff_, energy = compute_helicity_energy(z.sub(0))
+free_energy = compute_free_energy(z.sub(0))
 divB = compute_divB(z.sub(0))
 lamb = compute_lamb(z.sub(1), z.sub(0))
 xi = compute_xi_max(z.sub(1), z.sub(0))
@@ -390,6 +406,7 @@ if mesh.comm.rank == 0:
         "t": float(t),
         "helicity": float(helicity),
         "energy": float(energy),
+        "free_energy": float(free_energy),
         "divB": float(divB),
         "lamb": float(lamb),
         "xi": float(xi),
@@ -420,6 +437,7 @@ while (float(t) < float(T) - 1.0e-9):
 
     # monitor
     helicity, diff, diff_, energy= compute_helicity_energy(z.sub(0))
+    free_energy = compute_free_energy(z.sub(0))
     divB = compute_divB(z.sub(0))
     lamb = compute_lamb(z.sub(1), z.sub(0))
     xi = compute_xi_max(z.sub(1), z.sub(0))
@@ -430,6 +448,7 @@ while (float(t) < float(T) - 1.0e-9):
             "t": float(t),
             "helicity": float(helicity),
             "energy": float(energy),
+            "free_energy": float(free_energy),
             "divB": float(divB),
             "lamb": float(lamb),
             "xi": float(xi),

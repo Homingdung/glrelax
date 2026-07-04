@@ -58,7 +58,7 @@ dt_init = float(dt)
 # delta_energy threshold at which the two-LM scheme hands off to single-LM
 two_to_single_LM_de = 9e-5
 
-jump_after_steps = 100
+jump_after_steps = 200
 jump_dt          = 100 if is_e3 else 100.0
 jump_tau         = 1
 
@@ -122,8 +122,8 @@ elif is_e3:
 
     B_init = as_vector([B_x, B_y, B_z]) - B_b
 
-# Diagnostic guide field only.  The weak forms below intentionally continue
-# to evolve the fluctuation B and preserve the original standard helicity.
+# B stores the perturbation B_p.  The fixed curl-free guide field is restored
+# in every physical force and invariant below.
 guide_field = B_b if is_e3 else as_vector([0.0, 0.0, 0.0])
 
 # ============================================================
@@ -148,10 +148,12 @@ z_s_test = TestFunction(Z_s)
 (B_sp, u_sp, A_sp, E_sp, j_sp, lmbda_m_sp) = split(z_s_prev)
 
 def form_energy(B):
-    return dot(B, B)
+    B_total = B + guide_field
+    return dot(B_total, B_total)
 
 def form_dissipation(B, j):
-    return 2 * tau * inner(cross(B, j), cross(B, j))
+    B_total = B + guide_field
+    return 2 * tau * inner(cross(B_total, j), cross(B_total, j))
 
 def form_helicity(A, B):
     """
@@ -159,10 +161,13 @@ def form_helicity(A, B):
         (1/dt) * (form_helicity(A,B) - form_helicity(Ap,Bp), λ_m_test) * dx
     enforces conservation of the integrated helicity functional.
 
+    E3:        A·(B_p + 2 B_z)                  (relative helicity)
     closed:    A·B                              (standard helicity)
     periodic:  A·(B + harmonic)                 (generalised helicity)
     """
-    if periodic:
+    if is_e3:
+        return dot(A, B + 2 * guide_field)
+    elif periodic:
         harmonic = Function(Vd)
         harmonic.project(B - curl(A))
         return dot(A, B + harmonic)
@@ -170,19 +175,20 @@ def form_helicity(A, B):
         return dot(A, B)
 
 # Two-LM weak form — B equation is (B, Bt) - (curl A, Bt) = 0 so B = curl A.
+B_total = B + guide_field
 F = (
       inner(B, Bt) * dx
     - inner(curl(A), Bt) * dx
     + inner((A - Ap)/dt, At) * dx
     + inner(E, At) * dx
-    + 2 * lmbda_m * inner(B, At) * dx       # LM force: δH/δA = 2B
-    + 2 * lmbda_e * inner(B, curl(At)) * dx # LM force: δE/δA = 2 curl B
+    + 2 * lmbda_m * inner(B_total, At) * dx
+    + 2 * lmbda_e * inner(B_total, curl(At)) * dx
 
     + inner(E, Et) * dx
-    + inner(cross(u, B), Et) * dx
+    + inner(cross(u, B_total), Et) * dx
 
     + inner(u, ut) * dx
-    - tau * inner(cross(j, B), ut) * dx
+    - tau * inner(cross(j, B_total), ut) * dx
 
     + inner(j, jt) * dx
     - inner(B, curl(jt)) * dx
@@ -195,18 +201,19 @@ F = (
 )
 
 # Single-LM weak form
+B_total_s = B_s + guide_field
 F_s = (
       inner(B_s, B_st) * dx
     - inner(curl(A_s), B_st) * dx
     + inner((A_s - A_sp)/dt, A_st) * dx
     + inner(E_s, A_st) * dx
-    + 2 * lmbda_m_s * inner(B_s, A_st) * dx
+    + 2 * lmbda_m_s * inner(B_total_s, A_st) * dx
 
     + inner(E_s, E_st) * dx
-    + inner(cross(u_s, B_s), E_st) * dx
+    + inner(cross(u_s, B_total_s), E_st) * dx
 
     + inner(u_s, u_st) * dx
-    - tau * inner(cross(j_s, B_s), u_st) * dx
+    - tau * inner(cross(j_s, B_total_s), u_st) * dx
 
     + inner(j_s, j_st) * dx
     - inner(B_s, curl(j_st)) * dx
@@ -395,7 +402,9 @@ def compute_helicity(A_func, B_func):
     """
     Diagnostic helicity (matches what the LM enforces in form_helicity).
     """
-    if periodic:
+    if is_e3:
+        return assemble(inner(A_func, B_func + 2 * guide_field) * dx)
+    elif periodic:
         harmonic = Function(Vd)
         harmonic.project(B_func - curl(A_func))
         return assemble(inner(A_func, B_func + harmonic) * dx)
@@ -404,7 +413,7 @@ def compute_helicity(A_func, B_func):
 
 
 def compute_relative_helicity(A_func, B_func):
-    """Relative-helicity diagnostic; this is not imposed by the LM scheme."""
+    """Relative helicity; for E3 this is also the LM invariant."""
     return assemble(inner(A_func, B_func + 2 * guide_field) * dx)
 
 
@@ -413,7 +422,10 @@ def compute_divB(B_func):
 
 
 def compute_energy(B_func, A_func):
-    if periodic:
+    if is_e3:
+        B_total = B_func + guide_field
+        return assemble(inner(B_total, B_total) * dx)
+    elif periodic:
         harmonic = Function(Vd)
         harmonic.project(B_func - curl(A_func))
         return assemble(inner(B_func - harmonic, B_func - harmonic) * dx)
@@ -427,7 +439,8 @@ def compute_free_energy(B_func):
 
 def compute_lamb(j, B):
     eps = 1e-10
-    lamb = Function(Vg_).interpolate(dot(j, B)/(dot(B, B) + eps))
+    B_total = B + guide_field
+    lamb = Function(Vg_).interpolate(dot(j, B_total)/(dot(B_total, B_total) + eps))
     with lamb.dat.vec_ro as v:
         _, max_val = v.max()
         _, min_val = v.min()
@@ -439,7 +452,8 @@ def compute_lamb(j, B):
 
 def compute_xi_max(j, B):
     eps = 1e-10
-    xi = Function(Vg).interpolate(cross(j, B)/(dot(B, B) + eps))
+    B_total = B + guide_field
+    xi = Function(Vg).interpolate(cross(j, B_total)/(dot(B_total, B_total) + eps))
     with xi.dat.vec_ro as v:
         _, max_val = v.max()
         _, min_val = v.min()
