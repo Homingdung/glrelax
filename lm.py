@@ -4,6 +4,8 @@ import csv
 import os
 import sys
 import numpy as np
+from config import CONFIG
+from common import apply_jump_schedule, build_initial_condition, build_mesh_and_spaces
 
 # ANSI colours used by the time-stepping prints.
 RED   = "\033[91m%s\033[0m"
@@ -13,10 +15,10 @@ BLUE  = "\033[94m%s\033[0m"
 # ============================================================
 # Parameters
 # ============================================================
-output = True
-ic = os.environ.get("IC", "E3")  # hopf, E3, or E3-positive
-is_e3 = ic in ("E3", "E3-positive")
-bc = "closed"   # "closed" or "periodic"
+output = CONFIG.output
+ic = CONFIG.ic
+is_e3 = CONFIG.is_e3
+bc = CONFIG.bc
 scheme_name = "lm"
 output_dir = f"{scheme_name}-{ic.lower()}"
 
@@ -28,103 +30,39 @@ else:
     raise ValueError(f"unknown bc: {bc}")
 
 os.makedirs(output_dir, exist_ok=True)
+(Lx, Ly, Lz), (Nx, Ny, Nz) = CONFIG.domain
+dirichlet_ids = CONFIG.dirichlet_ids
 
-if ic == "hopf":
-    Lx, Ly, Lz = 8, 8, 20
-    Nx, Ny, Nz = 8, 8, 10
-elif is_e3:
-    Lx, Ly, Lz = 8, 8, 48
-    Nx, Ny, Nz = 4, 4, 24
-else:
-    raise ValueError(f"unknown initial condition: {ic}")
-
-if periodic:
-    dirichlet_ids = ("on_boundary",)
-else:
-    dirichlet_ids = ("on_boundary", "top", "bottom")
-
-order = 1
-tau = Constant(1)  
+order = CONFIG.order
+tau = Constant(CONFIG.tau)
 t = Constant(0)
-if is_e3:
-    dt = Constant(0.1)
-else:
-    dt = Constant(1)
+dt = Constant(CONFIG.dt_init)
 
-T = 10000
+T = CONFIG.T
 
 dt_init = float(dt)
 
 # delta_energy threshold at which the two-LM scheme hands off to single-LM
-two_to_single_LM_de = 9e-5
+two_to_single_LM_de = CONFIG.two_to_single_LM_de
+lm_handoff_rise_rtol = CONFIG.lm_handoff_rise_rtol
+lm_handoff_rise_steps = CONFIG.lm_handoff_rise_steps
 
-jump_after_steps = 200
-jump_dt          = 100 if is_e3 else 100.0
-jump_tau         = 1
+jump_after_steps = CONFIG.jump_after_steps
+jump_dt = CONFIG.jump_dt
+jump_tau = CONFIG.jump_tau
 
 # ============================================================
 # Mesh / function spaces
 # ============================================================
-base = RectangleMesh(Nx, Ny, Lx, Ly, quadrilateral=True)
-mesh = ExtrudedMesh(base, Lz, 1, periodic=periodic)
-mesh.coordinates.dat.data[:, 0] -= Lx/2
-mesh.coordinates.dat.data[:, 1] -= Ly/2
-mesh.coordinates.dat.data[:, 2] -= Lz/2
-
-Vg  = VectorFunctionSpace(mesh, "Q",   order)
-Vg_ = FunctionSpace(mesh,        "Q",   order)
-Vc  = FunctionSpace(mesh,        "NCE", order)
-Vd  = FunctionSpace(mesh,        "NCF", order)
-Vn  = FunctionSpace(mesh,        "DQ",  order-1)
-VR  = FunctionSpace(mesh,        "R",   0)
+mesh, spaces = build_mesh_and_spaces(CONFIG, include_real=True)
+Vg, Vg_, Vc, Vd, Vn, VR = (
+    spaces[name] for name in ("Vg", "Vg_", "Vc", "Vd", "Vn", "VR")
+)
 
 # ============================================================
 # Initial condition
 # ============================================================
-(X0, Y0, Z0) = x = SpatialCoordinate(mesh)
-
-if ic == "hopf":
-    w1 = 3
-    w2 = 2
-    s = 1
-    deno = 1 + dot(x, x)
-    coeff = 4*sqrt(s)/((pi * deno * deno * deno)*sqrt(w1**2+w2**2))
-    B_init = as_vector([ coeff*2*(w2*Y0 - w1*X0*Z0),
-                        -coeff*2*(w2*X0 + w1*Y0*Z0),
-                         coeff*w1*(-1 + X0**2 + Y0**2 - Z0**2)])
-
-elif is_e3:
-    x_c = [1, -1, 1, -1, 1, -1]
-    y_c = 0.0
-    z_c = [-20, -12, -4, 4, 12, 20]
-    a = sqrt(2)
-    # strength of twist
-    k = 5.0
-    k_sign = [1, -1, 1, -1, 1, -1] if ic == "E3" else [1] * 6
-    l = 2.0
-    B_0 = 1.0
-
-    B_x = 0.0
-    B_y = 0.0
-    B_z = B_0
-
-    # background magnetic field
-    B_b = as_vector([0.0, 0.0, B_0])
-
-    for i in range(6):
-        coeff = exp(
-            -((X0 - x_c[i])**2 / (a**2))
-            -((Y0 - y_c)**2 / (a**2))
-            -((Z0 - z_c[i])**2 / (l**2))
-        )
-        B_x += coeff * ((2.0 * k * k_sign[i] * B_0 / a) * (-(Y0 - y_c)))
-        B_y += coeff * ((2.0 * k * k_sign[i] * B_0 / a) * ((X0 - x_c[i])))
-
-    B_init = as_vector([B_x, B_y, B_z]) - B_b
-
-# B stores the perturbation B_p.  The fixed curl-free guide field is restored
-# in every physical force and invariant below.
-guide_field = B_b if is_e3 else as_vector([0.0, 0.0, 0.0])
+B_init, guide_field, B_b, k_sign = build_initial_condition(mesh, CONFIG)
 
 # ============================================================
 # Mixed unknowns
@@ -161,11 +99,15 @@ def form_helicity(A, B):
         (1/dt) * (form_helicity(A,B) - form_helicity(Ap,Bp), λ_m_test) * dx
     enforces conservation of the integrated helicity functional.
 
-    E3:        A·(B_p + 2 B_z)                  (relative helicity)
+    E3 periodic: A·(B_total + B_h)                (generalised helicity)
+    E3 closed:   A·(B_p + 2 B_z)                  (relative helicity)
     closed:    A·B                              (standard helicity)
     periodic:  A·(B + harmonic)                 (generalised helicity)
     """
-    if is_e3:
+    if is_e3 and periodic:
+        # B is B_total - B_h in the discrete unknown.
+        return dot(A, B + 2 * guide_field)
+    elif is_e3:
         return dot(A, B + 2 * guide_field)
     elif periodic:
         harmonic = Function(Vd)
@@ -176,12 +118,15 @@ def form_helicity(A, B):
 
 # Two-LM weak form — B equation is (B, Bt) - (curl A, Bt) = 0 so B = curl A.
 B_total = B + guide_field
+# Reduced derivative dH/dA.  For E3 periodic,
+# H_G = ∫ A·(B_total + B_h) = ∫ A·(curl(A) + 2B_h).
+helicity_gradient = 2 * (B + guide_field)
 F = (
       inner(B, Bt) * dx
     - inner(curl(A), Bt) * dx
     + inner((A - Ap)/dt, At) * dx
     + inner(E, At) * dx
-    + 2 * lmbda_m * inner(B_total, At) * dx
+    + lmbda_m * inner(helicity_gradient, At) * dx
     + 2 * lmbda_e * inner(B_total, curl(At)) * dx
 
     + inner(E, Et) * dx
@@ -202,12 +147,13 @@ F = (
 
 # Single-LM weak form
 B_total_s = B_s + guide_field
+helicity_gradient_s = 2 * (B_s + guide_field)
 F_s = (
       inner(B_s, B_st) * dx
     - inner(curl(A_s), B_st) * dx
     + inner((A_s - A_sp)/dt, A_st) * dx
     + inner(E_s, A_st) * dx
-    + 2 * lmbda_m_s * inner(B_total_s, A_st) * dx
+    + lmbda_m_s * inner(helicity_gradient_s, A_st) * dx
 
     + inner(E_s, E_st) * dx
     + inner(cross(u_s, B_total_s), E_st) * dx
@@ -402,7 +348,9 @@ def compute_helicity(A_func, B_func):
     """
     Diagnostic helicity (matches what the LM enforces in form_helicity).
     """
-    if is_e3:
+    if is_e3 and periodic:
+        return assemble(inner(A_func, B_func + 2 * guide_field) * dx)
+    elif is_e3:
         return assemble(inner(A_func, B_func + 2 * guide_field) * dx)
     elif periodic:
         harmonic = Function(Vd)
@@ -435,6 +383,13 @@ def compute_energy(B_func, A_func):
 
 def compute_free_energy(B_func):
     return assemble(inner(B_func, B_func) * dx)
+
+
+def compute_background_energy():
+    """Energy of the E3 harmonic field; zero when no E3 field is present."""
+    if not is_e3:
+        return 0.0
+    return assemble(inner(guide_field, guide_field) * dx(domain=mesh))
 
 
 def compute_lamb(j, B):
@@ -498,6 +453,8 @@ write_params(f"{output_dir}/param.txt", {
     "tau":                 float(tau),
     "dt_init":             dt_init,
     "two_to_single_LM_de": two_to_single_LM_de,
+    "lm_handoff_rise_rtol": lm_handoff_rise_rtol,
+    "lm_handoff_rise_steps": lm_handoff_rise_steps,
     "jump_after_steps":    jump_after_steps,
     "jump_dt":             jump_dt,
     "jump_tau":            jump_tau,
@@ -516,7 +473,9 @@ write_params(f"{output_dir}/param.txt", {
 # Time stepping
 # ============================================================
 data_filename = f"{output_dir}/data.csv"
-fieldnames = ["t", "helicity", "relative_helicity", "energy", "free_energy", "divB", "lamb", "xi"]
+fieldnames = ["t", "helicity", "relative_helicity", "energy", "free_energy",
+              "background_energy", "divB", "lamb", "xi"]
+helicity_print_label = "helicity_g" if periodic else "helicity"
 if mesh.comm.rank == 0:
     with open(data_filename, "w") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
@@ -527,19 +486,20 @@ relative_helicity = compute_relative_helicity(z.sub(2), z.sub(0))
 divB        = compute_divB(z.sub(0))
 energy      = compute_energy(z.sub(0), z.sub(2))
 free_energy = compute_free_energy(z.sub(0))
+background_energy = compute_background_energy()
 lamb        = compute_lamb(z.sub(4), z.sub(0))
 xi          = compute_xi_max(z.sub(4), z.sub(0))
 helicity_initial = helicity
 
 if mesh.comm.rank == 0:
-    label = "GeneralizedHelicity" if bc == "periodic" else "Helicity"
-    print(f"Initial {label} = {helicity_initial:.10e}", flush=True)
+    print(f"Initial {helicity_print_label} = {helicity_initial:.10e}", flush=True)
     row = {
         "t": float(t),
         "helicity":    float(helicity),
         "relative_helicity": float(relative_helicity),
         "energy":      float(energy),
         "free_energy": float(free_energy),
+        "background_energy": float(background_energy),
         "divB":        float(divB),
         "lamb":        float(lamb),
         "xi":          float(xi),
@@ -547,9 +507,16 @@ if mesh.comm.rank == 0:
     with open(data_filename, "a", newline='') as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writerow(row)
-        print(f"{row}")
+        printed_row = row.copy()
+        if periodic:
+            printed_row[helicity_print_label] = printed_row.pop("helicity")
+            printed_row.pop("relative_helicity")
+        print(f"{printed_row}")
 
 delta_energy = 1.0
+previous_delta_energy = None
+delta_energy_rise_count = 0
+automatic_lm_handoff = False
 timestep = 0
 z_s_init = False
 z_prev.assign(z)
@@ -561,7 +528,7 @@ while (float(t) < float(T) - 1.0e-9):
 
     # Which scheme is active this step. delta_energy is only updated in the
     # two-LM branch, so once it drops below the threshold we stay single-LM.
-    two_lm = delta_energy > two_to_single_LM_de
+    two_lm = (delta_energy > two_to_single_LM_de) and not automatic_lm_handoff
 
     # One-time handoff: seed the single-LM state from the two-LM state.
     # λ_e (z.sub(5)) is dropped; λ_m moves from z.sub(6) into z_s.sub(5).
@@ -602,6 +569,23 @@ while (float(t) < float(T) - 1.0e-9):
         energy       = compute_energy(z.sub(0), z.sub(2))
         free_energy  = compute_free_energy(z.sub(0))
         delta_energy = 1/dt_used * (compute_energy(z_prev.sub(0), z_prev.sub(2)) - energy)
+        if previous_delta_energy is not None:
+            rise_tolerance = lm_handoff_rise_rtol * max(abs(previous_delta_energy), 1e-14)
+            if delta_energy > previous_delta_energy + rise_tolerance:
+                delta_energy_rise_count += 1
+            else:
+                delta_energy_rise_count = 0
+
+            if delta_energy_rise_count >= lm_handoff_rise_steps:
+                automatic_lm_handoff = True
+                if mesh.comm.rank == 0:
+                    print(
+                        "delta_energy has risen for "
+                        f"{delta_energy_rise_count} consecutive steps; "
+                        "switching permanently to single-LM on the next step",
+                        flush=True,
+                    )
+        previous_delta_energy = delta_energy
         lamb         = compute_lamb(z.sub(4), z.sub(0))
         xi           = compute_xi_max(z.sub(4), z.sub(0))
         if mesh.comm.rank == 0:
@@ -626,7 +610,7 @@ while (float(t) < float(T) - 1.0e-9):
         z.sub(6).assign(z_s.sub(5))
 
     H_err = abs(helicity - helicity_initial)
-    H_err_label = "|H - H_0|"
+    H_err_label = "|H_g - H_g0|" if periodic else "|H - H_0|"
     if mesh.comm.rank == 0:
         print(f"Solved t = {float(t):.4f}, dt = {dt_used:g}, Newton iters = {iters}", flush=True)
         row = {
@@ -635,6 +619,7 @@ while (float(t) < float(T) - 1.0e-9):
             "relative_helicity": float(relative_helicity),
             "energy":      float(energy),
             "free_energy": float(free_energy),
+            "background_energy": float(background_energy),
             "divB":        float(divB),
             "lamb":        float(lamb),
             "xi":          float(xi),
@@ -642,7 +627,11 @@ while (float(t) < float(T) - 1.0e-9):
         with open(data_filename, "a", newline='') as f:
             writer = csv.DictWriter(f, fieldnames=fieldnames)
             writer.writerow(row)
-            print(f"{row}, {H_err_label} = {H_err:.4e}")
+            printed_row = row.copy()
+            if periodic:
+                printed_row[helicity_print_label] = printed_row.pop("helicity")
+                printed_row.pop("relative_helicity")
+            print(f"{printed_row}, {H_err_label} = {H_err:.4e}")
 
     if output:
         pvd.write(*z.subfunctions, time=float(t))
@@ -654,6 +643,4 @@ while (float(t) < float(T) - 1.0e-9):
     timestep += 1
 
     # ---- choose dt for the NEXT step: fixed dt, then jump to a larger dt + drop tau ----
-    if timestep > jump_after_steps:
-        dt.assign(jump_dt)
-        tau.assign(jump_tau)
+    apply_jump_schedule(timestep, dt, tau, CONFIG)

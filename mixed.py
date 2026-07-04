@@ -4,13 +4,15 @@ from firedrake import *
 import csv
 import os
 import sys
+from config import CONFIG
+from common import apply_jump_schedule, build_initial_condition, build_mesh_and_spaces
 # ============================================================
 # Parameters
 # ============================================================
-output = True
-ic = os.environ.get("IC", "E3")  # hopf, E3, or E3-positive
-is_e3 = ic in ("E3", "E3-positive")
-bc = "closed"  # "closed" or "periodic"
+output = CONFIG.output
+ic = CONFIG.ic
+is_e3 = CONFIG.is_e3
+bc = CONFIG.bc
 scheme_name = "mixed"
 output_dir = f"{scheme_name}-{ic.lower()}"
 
@@ -22,98 +24,40 @@ else:
     raise ValueError(f"unknown bc: {bc}")
 
 os.makedirs(output_dir, exist_ok=True)
+(Lx, Ly, Lz), (Nx, Ny, Nz) = CONFIG.domain
+dirichlet_ids = CONFIG.dirichlet_ids
 
-if ic == "hopf":
-    Lx, Ly, Lz = 8, 8, 20
-    Nx, Ny, Nz = 8, 8, 10
-elif is_e3:
-    Lx, Ly, Lz = 8, 8, 48
-    Nx, Ny, Nz = 4, 4, 24
-else:
-    raise ValueError(f"unknown initial condition: {ic}")
-
-if periodic:
-    dirichlet_ids = ("on_boundary",)
-else:
-    dirichlet_ids = ("on_boundary", "top", "bottom")
-
-order = 1
-tau = Constant(1) 
+order = CONFIG.order
+tau = Constant(CONFIG.tau)
 t = Constant(0)
-if is_e3:
-    dt = Constant(0.1)
-else:
-    dt = Constant(1)
-T = 10000
+dt = Constant(CONFIG.dt_init)
+T = CONFIG.T
 
 dt_init = float(dt)
-jump_after_steps = 100
-jump_dt          = 100 if is_e3 else 100.0
-jump_tau         = 1
+jump_after_steps = CONFIG.jump_after_steps
+jump_dt = CONFIG.jump_dt
+jump_tau = CONFIG.jump_tau
 
 # ============================================================
 # Mesh
 # ============================================================
-base = RectangleMesh(Nx, Ny, Lx, Ly, quadrilateral=True)
-mesh = ExtrudedMesh(base, Lz, 1, periodic=periodic)
-mesh.coordinates.dat.data[:, 0] -= Lx/2
-mesh.coordinates.dat.data[:, 1] -= Ly/2
-mesh.coordinates.dat.data[:, 2] -= Lz/2
-
-Vg = VectorFunctionSpace(mesh, "Q", order)
-Vg_ = FunctionSpace(mesh, "Q", order)
-Vc = FunctionSpace(mesh, "NCE", order)
-Vd = FunctionSpace(mesh, "NCF", order)
-Vn = FunctionSpace(mesh, "DQ", order-1)
+mesh, spaces = build_mesh_and_spaces(CONFIG)
+Vg, Vg_, Vc, Vd, Vn = (spaces[name] for name in ("Vg", "Vg_", "Vc", "Vd", "Vn"))
 
 # ============================================================
 # Initial condition (defined early so it can drive B')
 # ============================================================
-(X0, Y0, Z0) = x = SpatialCoordinate(mesh)
+B_init, guide_field, B_b, k_sign = build_initial_condition(mesh, CONFIG)
+harmonic_field = guide_field
 
-if ic == "hopf":
-    w1 = 3
-    w2 = 2
-    s = 1
-    deno = 1 + dot(x, x)
-    coeff = 4*sqrt(s)/((pi * deno * deno * deno)*sqrt(w1**2+w2**2))
-    B_init = as_vector([coeff*2*(w2*Y0-w1*X0*Z0),
-                        -coeff*2*(w2*X0+w1*Y0*Z0),
-                        coeff*w1*(-1+X0**2+Y0**2-Z0**2)])
-
-elif is_e3:
-    x_c = [1, -1, 1, -1, 1, -1]
-    y_c = 0.0
-    z_c = [-20, -12, -4, 4, 12, 20]
-    a = sqrt(2)
-    # strength of twist
-    k = 5.0
-    k_sign = [1, -1, 1, -1, 1, -1] if ic == "E3" else [1] * 6
-    l = 2.0
-    B_0 = 1.0
-
-    B_x = 0.0
-    B_y = 0.0
-    B_z = B_0
-
-    # background magnetic field
-    B_b = as_vector([0.0, 0.0, B_0])
-
-    for i in range(6):
-        coeff = exp(
-            -((X0 - x_c[i])**2 / (a**2))
-            -((Y0 - y_c)**2 / (a**2))
-            -((Z0 - z_c[i])**2 / (l**2))
-        )
-        B_x += coeff * ((2.0 * k * k_sign[i] * B_0 / a) * (-(Y0 - y_c)))
-        B_y += coeff * ((2.0 * k * k_sign[i] * B_0 / a) * ((X0 - x_c[i])))
-
-    # closed/periodic: subtract harmonic background
-    B_init = as_vector([B_x, B_y, B_z]) - B_b
-
-# The unknown B is the perturbation B_p.  The fixed harmonic guide field must
-# still enter the Lorentz force and induction terms.
-guide_field = B_b if is_e3 else as_vector([0.0, 0.0, 0.0])
+# On a periodic domain the harmonic (guide-field) component belongs to the
+# evolved magnetic field.  Keeping it outside B would make the projection and
+# midpoint relation evolve only the zero-mean perturbation.  For line-tied
+# boundaries it remains a fixed field and is added where the total field is
+# required.
+if periodic:
+    B_init = B_init + guide_field
+    guide_field = as_vector([0.0, 0.0, 0.0])
 # ============================================================
 # Mixed unknowns: [B, j, H, u, E]
 # ============================================================
@@ -217,12 +161,11 @@ def project_initial_conditions(B_init):
 B_.assign(project_initial_conditions(B_init))
 z_prev.assign(z)
 
-B_recover = Function(Vd, name="RecoveredMagneticField")
-
 if output:
     pvd = VTKFile(f"{output_dir}/parker.pvd")
     pvd.write(*z.subfunctions, time=float(t))
-    if is_e3 and bc == "closed":
+    if is_e3 and not periodic:
+        B_recover = Function(Vd, name="RecoveredMagneticField")
         pvd1 = VTKFile(f"{output_dir}/recover.pvd")
         B_recover.project(z.sub(0) + B_b)
         pvd1.write(B_recover, time=float(t))
@@ -322,8 +265,15 @@ def compute_helicity_energy(B):
     diff_field = Function(Vd, name="CurlAMinusB")
     diff_field.project(B - curl_A)
 
-    if is_e3:
-        # Relative helicity and total magnetic energy.
+    if is_e3 and periodic:
+        # B is the full evolved field.  Its harmonic component is the part
+        # that cannot be represented by curl(A), recovered here as diff_field.
+        return (assemble(inner(A, B + diff_field) * dx),
+                diff,
+                diff_field,
+                assemble(inner(B, B) * dx))
+    elif is_e3:
+        # Relative helicity for the line-tied domain.
         return (assemble(inner(A, B + 2 * guide_field) * dx),
                 diff,
                 diff_field,
@@ -346,6 +296,12 @@ def compute_divB(B):
 def compute_free_energy(B):
     """Energy above the fixed E3 guide field (B is the perturbation)."""
     return assemble(inner(B, B) * dx)
+
+def compute_background_energy():
+    """Energy of the E3 harmonic field; zero when no E3 field is present."""
+    if not is_e3:
+        return 0.0
+    return assemble(inner(harmonic_field, harmonic_field) * dx(domain=mesh))
 
 def compute_lamb(j, B):
     eps = 1e-10
@@ -427,7 +383,9 @@ write_params(f"{output_dir}/param.txt", {
 }, header="mixed.py")
 
 data_filename = f"{output_dir}/data.csv"
-fieldnames = ["t", "helicity", "energy", "free_energy", "divB", "lamb", "xi"]
+fieldnames = ["t", "helicity", "energy", "free_energy", "background_energy",
+              "divB", "lamb", "xi"]
+helicity_print_label = "helicity_g" if periodic else "helicity"
 if mesh.comm.rank == 0:
     with open(data_filename, "w") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
@@ -436,6 +394,7 @@ if mesh.comm.rank == 0:
 # Initial values
 helicity, diff, diff_field, energy = compute_helicity_energy(z.sub(0))
 free_energy = compute_free_energy(z.sub(0))
+background_energy = compute_background_energy()
 divB = compute_divB(z.sub(0))
 lamb = compute_lamb(z.sub(1), z.sub(0))
 xi = compute_xi_max(z.sub(1), z.sub(0))
@@ -444,14 +403,14 @@ xi = compute_xi_max(z.sub(1), z.sub(0))
 helicity_initial = helicity
 
 if mesh.comm.rank == 0:
-    label = "GeneralizedHelicity" if bc == "periodic" else "Helicity"
-    print(f"Initial {label} = {helicity_initial:.10e}", flush=True)
+    print(f"Initial {helicity_print_label} = {helicity_initial:.10e}", flush=True)
     
     row = {
         "t": float(t),
         "helicity": float(helicity),
         "energy": float(energy),
         "free_energy": float(free_energy),
+        "background_energy": float(background_energy),
         "divB": float(divB),
         "lamb": float(lamb),
         "xi": float(xi),
@@ -459,7 +418,10 @@ if mesh.comm.rank == 0:
     with open(data_filename, "a", newline='') as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writerow(row)
-        print(f"{row}")
+        printed_row = row.copy()
+        if periodic:
+            printed_row[helicity_print_label] = printed_row.pop("helicity")
+        print(f"{printed_row}")
 
 timestep = 0
 z_prev.assign(z)
@@ -486,7 +448,7 @@ while (float(t) < float(T) - 1.0e-9):
     xi = compute_xi_max(z.sub(1), z.sub(0))
 
     H_err = abs(helicity - helicity_initial)
-    H_err_label = "|H - H_0|"
+    H_err_label = "|H_g - H_g0|" if periodic else "|H - H_0|"
 
     if mesh.comm.rank == 0:
         print(f"Solved t = {float(t):.4f}, dt = {dt_used:g}, Newton iters = {iters}, "
@@ -496,6 +458,7 @@ while (float(t) < float(T) - 1.0e-9):
             "helicity": float(helicity),
             "energy": float(energy),
             "free_energy": float(free_energy),
+            "background_energy": float(background_energy),
             "divB": float(divB),
             "lamb": float(lamb),
             "xi": float(xi),
@@ -503,12 +466,14 @@ while (float(t) < float(T) - 1.0e-9):
         with open(data_filename, "a", newline='') as f:
             writer = csv.DictWriter(f, fieldnames=fieldnames)
             writer.writerow(row)
-            print(f"{row}, {H_err_label} = {H_err:.4e}")
+            printed_row = row.copy()
+            if periodic:
+                printed_row[helicity_print_label] = printed_row.pop("helicity")
+            print(f"{printed_row}, {H_err_label} = {H_err:.4e}")
 
     if output:
         pvd.write(*z.subfunctions, time=float(t))
-        if is_e3 and bc == "closed":
-            B_b = as_vector([0, 0, 1])
+        if is_e3 and not periodic:
             B_recover.project(z.sub(0) + B_b)
             pvd1.write(B_recover, time=float(t))
 
@@ -516,6 +481,4 @@ while (float(t) < float(T) - 1.0e-9):
     timestep += 1
 
     # ---- choose dt for the NEXT step: fixed dt, then jump to a larger dt + drop tau ----
-    if timestep > jump_after_steps:
-        dt.assign(jump_dt)
-        tau.assign(jump_tau)
+    apply_jump_schedule(timestep, dt, tau, CONFIG)
