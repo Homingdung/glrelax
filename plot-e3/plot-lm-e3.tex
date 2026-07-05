@@ -1,0 +1,61 @@
+\documentclass[tikz, border=10pt]{standalone}
+\usepackage{pgfplots}
+\pgfplotsset{compat=1.17}
+\usepackage{amsmath}
+\usepackage{bm}
+\providecommand{\ICSuffix}{e3}
+
+\definecolor{seabornblue}{rgb}{0.2980392156862745, 0.4470588235294118, 0.6901960784313725}
+\definecolor{seabornred}{rgb}{0.7686274509803922, 0.3058823529411765, 0.3215686274509804}
+
+\begin{document}
+
+\begin{tikzpicture}
+\begin{axis}[
+    name=mainplot,
+    width=7cm, height=5cm,
+    xlabel={$t$},
+    ylabel={Value},
+    %title={Lagrange multiplier method},
+    legend style={at={(0.5,-0.25)}, anchor=north, legend columns=2},
+    legend cell align={left},
+]
+    \addplot[color=seabornred, thick]
+        table[x=t, y=energy, col sep=comma] {../lm-\ICSuffix/data.csv};
+    \addlegendentry{$\mathcal{E}_h$}
+
+    \addplot[color=seabornred, thick, dashed]
+        table[x=t, y=background_energy, col sep=comma] {../lm-\ICSuffix/data.csv};
+    \addlegendentry{$\lVert\bm B_H\rVert^2$}
+
+    \addplot[color=seabornblue, thick, dashed]
+        table[x=t, y=helicity, col sep=comma] {../lm-\ICSuffix/data.csv};
+    \addlegendentry{$\tilde{\mathcal{H}}_h$}
+
+    \coordinate (zoomrectsw) at (axis cs:0,2950);
+    \coordinate (zoomrectne) at (axis cs:100,4500);
+    \coordinate (zoomrectse) at (axis cs:100,2950);
+\end{axis}
+
+\begin{axis}[
+    name=zoomplot,
+    at={(4.75cm,3.75cm)}, anchor=north east,
+    width=3.75cm, height=2.65cm,
+    xmin=0, xmax=100, ymin=2950, ymax=4500,
+    restrict x to domain=0:120.1,
+    xtick={0,50,100}, ytick={3000,3600,4200},
+    tick label style={font=\scriptsize},
+    axis background/.style={fill=white},
+]
+    \addplot[color=seabornred, thick]
+        table[x=t, y=energy, col sep=comma] {../lm-\ICSuffix/data.csv};
+    \addplot[color=seabornred, very thick, densely dashed]
+        table[x=t, y=background_energy, col sep=comma] {../lm-\ICSuffix/data.csv};
+\end{axis}
+\draw[gray, thin, densely dashed] (zoomrectsw) rectangle (zoomrectne);
+\draw[gray, thin] (zoomrectne) -- (zoomplot.north west);
+\draw[gray, thin] (zoomrectse) -- (zoomplot.south west);
+
+\end{tikzpicture}
+
+\end{document}

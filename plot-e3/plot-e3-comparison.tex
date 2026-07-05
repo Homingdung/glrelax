@@ -1,0 +1,45 @@
+\documentclass[tikz, border=10pt]{standalone}
+\usepackage{pgfplots}
+\pgfplotsset{compat=1.17}
+\usepackage{amsmath}
+\usepackage{bm}
+
+\definecolor{seabornblue}{rgb}{0.2980392156862745, 0.4470588235294118, 0.6901960784313725}
+\definecolor{seabornred}{rgb}{0.7686274509803922, 0.3058823529411765, 0.3215686274509804}
+\definecolor{seaborngreen}{rgb}{0.3333333333333333, 0.6588235294117647, 0.40784313725490196}
+
+\begin{document}
+\begin{tikzpicture}
+\begin{axis}[
+    width=8cm,
+    height=5.5cm,
+    xmin=0, xmax=100,
+    ymin=3000, ymax=4500,
+    % Keep the first sample beyond t=100 so the sparse-data segment is
+    % interpolated up to the right boundary and then clipped by the axis.
+    restrict x to domain=0:120.1,
+    xlabel={$t$},
+    ylabel={$\mathcal{E}_h$},
+    xtick={0,20,40,60,80,100},
+    ytick={3072,3500,4000,4500},
+    legend style={at={(0.97,0.97)}, anchor=north east},
+    legend cell align={left},
+]
+    \addplot[color=seabornred, very thick]
+        table[x=t, y=energy, col sep=comma] {../mixed-e3/data.csv};
+    \addlegendentry{Projection scheme}
+
+    \addplot[color=seabornblue, very thick]
+        table[x=t, y=energy, col sep=comma] {../lm-e3/data.csv};
+    \addlegendentry{LM scheme}
+
+    \addplot[color=seaborngreen, very thick]
+        table[x=t, y=energy, col sep=comma] {../hdiv-e3/data.csv};
+    \addlegendentry{Non-conservative scheme}
+
+    \addplot[color=seabornred, thick, dashed]
+        table[x=t, y=background_energy, col sep=comma] {../mixed-e3/data.csv};
+    \addlegendentry{$\lVert\bm B_H\rVert^2$}
+\end{axis}
+\end{tikzpicture}
+\end{document}
