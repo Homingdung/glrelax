@@ -20,9 +20,14 @@ cases=(e3 e3-positive hopf)
 missing=0
 
 for case_name in "${cases[@]}"; do
+    plot_dir="plot-${case_name}"
+    if [[ ! -d "$plot_dir" ]]; then
+        echo "missing: $plot_dir/ (LaTeX plot templates)" >&2
+        missing=1
+    fi
+
     for method in "${methods[@]}"; do
         data_file="${method}-${case_name}/data.csv"
-        error_file="errors/${method}-${case_name}-error.csv"
 
         if [[ ! -f "$data_file" ]]; then
             echo "missing: $data_file" >&2
@@ -32,6 +37,14 @@ for case_name in "${cases[@]}"; do
             echo "invalid columns: $data_file (required: t, energy, helicity)" >&2
             missing=1
         fi
+
+        for kind in plot error; do
+            tex_file="${plot_dir}/${kind}-${method}-${case_name}.tex"
+            if [[ ! -f "$tex_file" ]]; then
+                echo "missing: $tex_file" >&2
+                missing=1
+            fi
+        done
 
     done
 done

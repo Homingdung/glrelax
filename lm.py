@@ -76,24 +76,24 @@ if is_e3 and periodic:
 
 # ============================================================
 # Mixed unknowns
-#   two-LM:    [B, u, A, E, j, λ_e, λ_m]   energy + helicity LMs
-#   single-LM: [B, u, A, E, j, λ_m]        helicity LM only
+#   two-LM:    [B, A, E, j, λ_e, λ_m]   energy + helicity LMs
+#   single-LM: [B, A, E, j, λ_m]        helicity LM only
 # ============================================================
-Z = MixedFunctionSpace([Vd, Vd, Vc, Vc, Vc, VR, VR])
+Z = MixedFunctionSpace([Vd, Vc, Vc, Vc, VR, VR])
 z      = Function(Z)
 z_prev = Function(Z)
 z_test = TestFunction(Z)
-(B,  u,  A,  E,  j,  lmbda_e,  lmbda_m)  = split(z)
-(Bt, ut, At, Et, jt, lmbda_et, lmbda_mt) = split(z_test)
-(Bp, up, Ap, Ep, jp, lmbda_ep, lmbda_mp) = split(z_prev)
+(B,  A,  E,  j,  lmbda_e,  lmbda_m)  = split(z)
+(Bt, At, Et, jt, lmbda_et, lmbda_mt) = split(z_test)
+(Bp, Ap, Ep, jp, lmbda_ep, lmbda_mp) = split(z_prev)
 
-Z_s = MixedFunctionSpace([Vd, Vd, Vc, Vc, Vc, VR])
+Z_s = MixedFunctionSpace([Vd, Vc, Vc, Vc, VR])
 z_s      = Function(Z_s)
 z_s_prev = Function(Z_s)
 z_s_test = TestFunction(Z_s)
-(B_s,  u_s,  A_s,  E_s,  j_s,  lmbda_m_s)  = split(z_s)
-(B_st, u_st, A_st, E_st, j_st, lmbda_m_st) = split(z_s_test)
-(B_sp, u_sp, A_sp, E_sp, j_sp, lmbda_m_sp) = split(z_s_prev)
+(B_s,  A_s,  E_s,  j_s,  lmbda_m_s)  = split(z_s)
+(B_st, A_st, E_st, j_st, lmbda_m_st) = split(z_s_test)
+(B_sp, A_sp, E_sp, j_sp, lmbda_m_sp) = split(z_s_prev)
 
 def form_energy(B):
     B_total = B + guide_field
@@ -109,15 +109,11 @@ def form_helicity(A, B):
         (1/dt) * (form_helicity(A,B) - form_helicity(Ap,Bp), λ_m_test) * dx
     enforces conservation of the integrated helicity functional.
 
-    E3 periodic: A·(B_total + B_h)                (generalised helicity)
-    E3 closed:   A·(B_p + 2 B_z)                  (relative helicity)
-    closed:    A·B                              (standard helicity)
-    periodic:  A·(B + harmonic)                 (generalised helicity)
+    closed:    A·B                              (helicity)
+    periodic:  A·(B + harmonic)                 (generalized helicity)
     """
     if is_e3 and periodic:
         return dot(A, B + harmonic_field)
-    elif is_e3:
-        return dot(A, B + 2 * guide_field)
     elif periodic:
         harmonic = Function(Vd)
         harmonic.project(B - curl(A))
@@ -130,7 +126,7 @@ def form_helicity(A, B):
 B_total = B + guide_field
 # Reduced derivative dH/dA.  For E3 periodic,
 # H_G = ∫ A·(B_total + B_h) = ∫ A·(curl(A) + 2B_h).
-helicity_gradient = 2 * (B + guide_field)
+helicity_gradient = 2 * (B + harmonic_field) if is_e3 and periodic else 2 * B
 F = (
       inner(B - evolved_harmonic, Bt) * dx
     - inner(curl(A), Bt) * dx
@@ -140,10 +136,7 @@ F = (
     + 2 * lmbda_e * inner(B_total, curl(At)) * dx
 
     + inner(E, Et) * dx
-    + inner(cross(u, B_total), Et) * dx
-
-    + inner(u, ut) * dx
-    - tau * inner(cross(j, B_total), ut) * dx
+    + tau * inner(cross(cross(j, B_total), B_total), Et) * dx
 
     + inner(j, jt) * dx
     - inner(B, curl(jt)) * dx
@@ -157,7 +150,7 @@ F = (
 
 # Single-LM weak form
 B_total_s = B_s + guide_field
-helicity_gradient_s = 2 * (B_s + guide_field)
+helicity_gradient_s = 2 * (B_s + harmonic_field) if is_e3 and periodic else 2 * B_s
 F_s = (
       inner(B_s - evolved_harmonic, B_st) * dx
     - inner(curl(A_s), B_st) * dx
@@ -166,10 +159,7 @@ F_s = (
     + lmbda_m_s * inner(helicity_gradient_s, A_st) * dx
 
     + inner(E_s, E_st) * dx
-    + inner(cross(u_s, B_total_s), E_st) * dx
-
-    + inner(u_s, u_st) * dx
-    - tau * inner(cross(j_s, B_total_s), u_st) * dx
+    + tau * inner(cross(cross(j_s, B_total_s), B_total_s), E_st) * dx
 
     + inner(j_s, j_st) * dx
     - inner(B_s, curl(j_st)) * dx
@@ -199,10 +189,9 @@ sp = None  # Firedrake default
 # ============================================================
 # Setup: rename and initialise solution fields
 # ============================================================
-(B_, u_, A_, E_, j_, lmbda_e_, lmbda_m_) = z.subfunctions
+(B_, A_, E_, j_, lmbda_e_, lmbda_m_) = z.subfunctions
 B_.rename("MagneticField")
 E_.rename("ElectricField")
-u_.rename("Velocity")
 A_.rename("MagneticPotential")
 j_.rename("Current")
 
@@ -284,7 +273,7 @@ def potential_solver_direct(B_func):
 # Initialise with projected B and consistent A_f
 proj_B0 = project_initial_conditions(B_init)
 z_prev.sub(0).project(proj_B0)
-z_prev.sub(2).project(potential_solver_direct(proj_B0))
+z_prev.sub(1).project(potential_solver_direct(proj_B0))
 z.assign(z_prev)
 
 if output:
@@ -355,21 +344,12 @@ def compute_helicity(A_func, B_func):
     """
     if is_e3 and periodic:
         return assemble(inner(A_func, B_func + harmonic_field) * dx)
-    elif is_e3:
-        return assemble(inner(A_func, B_func + 2 * guide_field) * dx)
     elif periodic:
         harmonic = Function(Vd)
         harmonic.project(B_func - curl(A_func))
         return assemble(inner(A_func, B_func + harmonic) * dx)
     else:
         return assemble(inner(A_func, B_func) * dx)
-
-
-def compute_relative_helicity(A_func, B_func):
-    """Relative helicity; for E3 this is also the LM invariant."""
-    if is_e3 and periodic:
-        return assemble(inner(A_func, B_func + harmonic_field) * dx)
-    return assemble(inner(A_func, B_func + 2 * guide_field) * dx)
 
 
 def compute_divB(B_func):
@@ -480,22 +460,21 @@ write_params(f"{output_dir}/param.txt", {
 # Time stepping
 # ============================================================
 data_filename = f"{output_dir}/data.csv"
-fieldnames = ["t", "helicity", "relative_helicity", "energy", "free_energy",
+fieldnames = ["t", "helicity", "energy", "free_energy",
               "background_energy", "divB", "lamb", "xi"]
-helicity_print_label = "helicity_g" if periodic else "helicity"
+helicity_print_label = "generalized_helicity" if periodic else "helicity"
 if mesh.comm.rank == 0:
     with open(data_filename, "w") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
 
-helicity    = compute_helicity(z.sub(2), z.sub(0))
-relative_helicity = compute_relative_helicity(z.sub(2), z.sub(0))
+helicity    = compute_helicity(z.sub(1), z.sub(0))
 divB        = compute_divB(z.sub(0))
-energy      = compute_energy(z.sub(0), z.sub(2))
+energy      = compute_energy(z.sub(0), z.sub(1))
 free_energy = compute_free_energy(z.sub(0))
 background_energy = compute_background_energy()
-lamb        = compute_lamb(z.sub(4), z.sub(0))
-xi          = compute_xi_max(z.sub(4), z.sub(0))
+lamb        = compute_lamb(z.sub(3), z.sub(0))
+xi          = compute_xi_max(z.sub(3), z.sub(0))
 helicity_initial = helicity
 
 if mesh.comm.rank == 0:
@@ -503,7 +482,6 @@ if mesh.comm.rank == 0:
     row = {
         "t": float(t),
         "helicity":    float(helicity),
-        "relative_helicity": float(relative_helicity),
         "energy":      float(energy),
         "free_energy": float(free_energy),
         "background_energy": float(background_energy),
@@ -517,7 +495,6 @@ if mesh.comm.rank == 0:
         printed_row = row.copy()
         if periodic:
             printed_row[helicity_print_label] = printed_row.pop("helicity")
-            printed_row.pop("relative_helicity")
         print(f"{printed_row}")
 
 delta_energy = 1.0
@@ -538,14 +515,13 @@ while (float(t) < float(T) - 1.0e-9):
     two_lm = (delta_energy > two_to_single_LM_de) and not automatic_lm_handoff
 
     # One-time handoff: seed the single-LM state from the two-LM state.
-    # λ_e (z.sub(5)) is dropped; λ_m moves from z.sub(6) into z_s.sub(5).
+    # λ_e (z.sub(4)) is dropped; λ_m moves from z.sub(5) into z_s.sub(4).
     if (not two_lm) and (not z_s_init):
         z_s_prev.sub(0).assign(z.sub(0))
         z_s_prev.sub(1).assign(z.sub(1))
         z_s_prev.sub(2).assign(z.sub(2))
         z_s_prev.sub(3).assign(z.sub(3))
-        z_s_prev.sub(4).assign(z.sub(4))
-        z_s_prev.sub(5).assign(z.sub(6))
+        z_s_prev.sub(4).assign(z.sub(5))
         if mesh.comm.rank == 0:
             print("initializing for z_s is done")
         z_s_init = True
@@ -570,12 +546,11 @@ while (float(t) < float(T) - 1.0e-9):
     t.assign(float(t) + dt_used)
 
     if two_lm:
-        helicity     = compute_helicity(z.sub(2), z.sub(0))
-        relative_helicity = compute_relative_helicity(z.sub(2), z.sub(0))
+        helicity     = compute_helicity(z.sub(1), z.sub(0))
         divB         = compute_divB(z.sub(0))
-        energy       = compute_energy(z.sub(0), z.sub(2))
+        energy       = compute_energy(z.sub(0), z.sub(1))
         free_energy  = compute_free_energy(z.sub(0))
-        delta_energy = 1/dt_used * (compute_energy(z_prev.sub(0), z_prev.sub(2)) - energy)
+        delta_energy = 1/dt_used * (compute_energy(z_prev.sub(0), z_prev.sub(1)) - energy)
         if previous_delta_energy is not None:
             rise_tolerance = lm_handoff_rise_rtol * max(abs(previous_delta_energy), 1e-14)
             if delta_energy > previous_delta_energy + rise_tolerance:
@@ -593,28 +568,27 @@ while (float(t) < float(T) - 1.0e-9):
                         flush=True,
                     )
         previous_delta_energy = delta_energy
-        lamb         = compute_lamb(z.sub(4), z.sub(0))
-        xi           = compute_xi_max(z.sub(4), z.sub(0))
+        lamb         = compute_lamb(z.sub(3), z.sub(0))
+        xi           = compute_xi_max(z.sub(3), z.sub(0))
         if mesh.comm.rank == 0:
             print(GREEN % f"{delta_energy}")
-            print(BLUE  % f"lmbda_e = {norm(z.sub(5))}, lmbda_m = {norm(z.sub(6))}")
+            print(BLUE  % f"lmbda_e = {norm(z.sub(4))}, lmbda_m = {norm(z.sub(5))}")
     else:
-        helicity    = compute_helicity(z_s.sub(2), z_s.sub(0))
-        relative_helicity = compute_relative_helicity(z_s.sub(2), z_s.sub(0))
+        helicity    = compute_helicity(z_s.sub(1), z_s.sub(0))
         divB        = compute_divB(z_s.sub(0))
-        energy      = compute_energy(z_s.sub(0), z_s.sub(2))
+        energy      = compute_energy(z_s.sub(0), z_s.sub(1))
         free_energy = compute_free_energy(z_s.sub(0))
-        lamb        = compute_lamb(z_s.sub(4), z_s.sub(0))
-        xi          = compute_xi_max(z_s.sub(4), z_s.sub(0))
+        lamb        = compute_lamb(z_s.sub(3), z_s.sub(0))
+        xi          = compute_xi_max(z_s.sub(3), z_s.sub(0))
         if mesh.comm.rank == 0:
-            print(BLUE % f"lmbda_m = {norm(z_s.sub(5))}")
+            print(BLUE % f"lmbda_m = {norm(z_s.sub(4))}")
         # Sync z_s state into z so the output PVD keeps the same set of
-        # functions across the two-LM → single-LM transition. λ_e (z.sub(5))
-        # is no longer evolved, so leave it as-is; λ_m moves from z_s.sub(5)
-        # into z.sub(6).
-        for i in range(5):
+        # functions across the two-LM → single-LM transition. λ_e (z.sub(4))
+        # is no longer evolved, so leave it as-is; λ_m moves from z_s.sub(4)
+        # into z.sub(5).
+        for i in range(4):
             z.sub(i).assign(z_s.sub(i))
-        z.sub(6).assign(z_s.sub(5))
+        z.sub(5).assign(z_s.sub(4))
 
     H_err = abs(helicity - helicity_initial)
     H_err_label = "|H_g - H_g0|" if periodic else "|H - H_0|"
@@ -623,7 +597,6 @@ while (float(t) < float(T) - 1.0e-9):
         row = {
             "t": float(t),
             "helicity":    float(helicity),
-            "relative_helicity": float(relative_helicity),
             "energy":      float(energy),
             "free_energy": float(free_energy),
             "background_energy": float(background_energy),
@@ -637,7 +610,6 @@ while (float(t) < float(T) - 1.0e-9):
             printed_row = row.copy()
             if periodic:
                 printed_row[helicity_print_label] = printed_row.pop("helicity")
-                printed_row.pop("relative_helicity")
             print(f"{printed_row}, {H_err_label} = {H_err:.4e}")
 
     if output:

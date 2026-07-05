@@ -337,7 +337,7 @@ write_params(f"{output_dir}/param.txt", {
 data_filename = f"{output_dir}/data.csv"
 fieldnames = ["t", "helicity", "energy", "free_energy", "background_energy",
               "divB", "lamb", "xi"]
-helicity_print_label = "helicity_g" if periodic else "helicity"
+helicity_print_label = "generalized_helicity" if periodic else "helicity"
 if mesh.comm.rank == 0:
     with open(data_filename, "w") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)

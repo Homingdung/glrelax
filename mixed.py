@@ -59,31 +59,27 @@ if periodic:
     B_init = B_init + guide_field
     guide_field = as_vector([0.0, 0.0, 0.0])
 # ============================================================
-# Mixed unknowns: [B, j, H, u, E]
+# Mixed unknowns: [B, E, j, H]
 # ============================================================
-Z = MixedFunctionSpace([Vd, Vc, Vc, Vd, Vc])
+Z = MixedFunctionSpace([Vd, Vc, Vc, Vc])
 z = Function(Z)
-(B, j, H, u, E) = split(z)
-(Bt, jt, Ht, ut, Et) = split(TestFunction(Z))
+(B, E, j, H) = split(z)
+(Bt, Et, jt, Ht) = split(TestFunction(Z))
 
 z_prev = Function(Z)
-(Bp, jp, Hp, up, Ep) = split(z_prev)
+(Bp, Ep, jp, Hp) = split(z_prev)
 B_avg = (B + Bp)/2
 H_total = H + guide_field
 E_avg = E
 H_avg = H
 j_avg = j
-u_avg = u
-eps = 1e-5
 F = (
       inner((B-Bp)/dt, Bt) * dx
     + inner(curl(E_avg), Bt) * dx
     - inner(B_avg, curl(jt)) * dx
     + inner(j_avg, jt) * dx
-    - inner(cross(Et, H_total), u) * dx
+    - tau * inner(cross(Et, H_total), cross(j_avg, H_total)) * dx
     + inner(E_avg, Et) * dx
-    + inner(u_avg, ut) * dx
-    - tau * inner(cross(j_avg, H_total), ut) * dx
     + inner(H_avg, Ht) * dx
     - inner(B_avg, Ht) * dx
     )
@@ -111,12 +107,11 @@ sp = lu
 # ============================================================
 # (B_init was defined above so it could drive B'.)
 
-(B_, j_, H_, u_, E_) = z.subfunctions
+(B_, E_, j_, H_) = z.subfunctions
 B_.rename("MagneticField")
 E_.rename("ElectricField")
 H_.rename("HCurlMagneticField")
 j_.rename("Current")
-u_.rename("Velocity")
 
 # ============================================================
 # Project initial conditions: ensure div(B) = 0 with correct boundary
@@ -188,7 +183,7 @@ def build_nonlinear_solver(F, z, bcs, Jp=None, solver_parameters=None, options_p
     return solver
 
 # ============================================================
-# Helicity / relative helicity solver
+# Helicity solver
 # ============================================================
 def helicity_solver():
     """
@@ -272,12 +267,6 @@ def compute_helicity_energy(B):
                 diff,
                 diff_field,
                 assemble(inner(B, B) * dx))
-    elif is_e3:
-        # Relative helicity for the line-tied domain.
-        return (assemble(inner(A, B + 2 * guide_field) * dx),
-                diff,
-                diff_field,
-                assemble(inner(B + guide_field, B + guide_field) * dx))
     elif bc == "closed":
         return (assemble(inner(A, B) * dx),
                 diff,
@@ -386,7 +375,7 @@ write_params(f"{output_dir}/param.txt", {
 data_filename = f"{output_dir}/data.csv"
 fieldnames = ["t", "helicity", "energy", "free_energy", "background_energy",
               "divB", "lamb", "xi"]
-helicity_print_label = "helicity_g" if periodic else "helicity"
+helicity_print_label = "generalized_helicity" if periodic else "helicity"
 if mesh.comm.rank == 0:
     with open(data_filename, "w") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
@@ -397,8 +386,8 @@ helicity, diff, diff_field, energy = compute_helicity_energy(z.sub(0))
 free_energy = compute_free_energy(z.sub(0))
 background_energy = compute_background_energy()
 divB = compute_divB(z.sub(0))
-lamb = compute_lamb(z.sub(1), z.sub(0))
-xi = compute_xi_max(z.sub(1), z.sub(0))
+lamb = compute_lamb(z.sub(2), z.sub(0))
+xi = compute_xi_max(z.sub(2), z.sub(0))
 
 # Store initial helicity for monitoring conservation
 helicity_initial = helicity
@@ -445,8 +434,8 @@ while (float(t) < float(T) - 1.0e-9):
     helicity, diff, diff_field, energy = compute_helicity_energy(z.sub(0))
     free_energy = compute_free_energy(z.sub(0))
     divB = compute_divB(z.sub(0))
-    lamb = compute_lamb(z.sub(1), z.sub(0))
-    xi = compute_xi_max(z.sub(1), z.sub(0))
+    lamb = compute_lamb(z.sub(2), z.sub(0))
+    xi = compute_xi_max(z.sub(2), z.sub(0))
 
     H_err = abs(helicity - helicity_initial)
     H_err_label = "|H_g - H_g0|" if periodic else "|H - H_0|"

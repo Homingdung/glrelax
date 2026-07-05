@@ -60,8 +60,8 @@ def plot_data(data_path):
     data = pd.read_csv(data_path)
     params = read_params(output_dir)
     periodic = params.get("bc") == "periodic"
-    helicity_label = "helicity_g" if periodic else "helicity"
-    helicity_abs_label = r"$|H_g|$" if periodic else r"$|H|$"
+    helicity_label = "generalized helicity" if periodic else "helicity"
+    helicity_abs_label = r"$|H_G|$" if periodic else r"$|H|$"
 
     required = {"t", "helicity", "energy"}
     missing = required.difference(data.columns)
