@@ -8,8 +8,20 @@ export MPLCONFIGDIR="${MPLCONFIGDIR:-/tmp/braids-matplotlib-cache}"
 mkdir -p "$MPLCONFIGDIR"
 
 #methods=(hdiv mixed lm)
-methods=(mixed lm hdiv)
-initial_conditions=(hopf)
+methods=(mixed)
+initial_conditions=(E3 E3-positive)
+#initial_conditions=(hopf E3 E3-positive)
+# Complete input combinations (3 methods x 3 initial conditions).
+# Uncomment any command below to run that experiment independently.
+# IC=hopf       python hdiv.py
+# IC=hopf       python mixed.py
+# IC=hopf       python lm.py
+# IC=E3         python hdiv.py
+# IC=E3         python mixed.py
+# IC=E3         python lm.py
+# IC=E3-positive python hdiv.py
+# IC=E3-positive python mixed.py
+# IC=E3-positive python lm.py
 
 for ic in "${initial_conditions[@]}"; do
     if [[ "$ic" == "hopf" ]]; then
@@ -26,8 +38,9 @@ for ic in "${initial_conditions[@]}"; do
 done
 
 echo "============================================================"
-echo "Generating all plots"
+echo "Generating Matplotlib, PGFPlots, and error outputs"
 echo "============================================================"
 python plt.py
+./plot-all.sh
 
 echo "All nine experiments and plots are complete."

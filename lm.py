@@ -62,7 +62,17 @@ Vg, Vg_, Vc, Vd, Vn, VR = (
 # ============================================================
 # Initial condition
 # ============================================================
-B_init, guide_field, B_b, k_sign = build_initial_condition(mesh, CONFIG)
+B_init, guide_field, _B_b, k_sign = build_initial_condition(mesh, CONFIG)
+
+# E3 is evolved as the complete magnetic field on the z-periodic domain.
+# Its harmonic component cannot be represented by curl(A), so retain that
+# component explicitly in the B = curl(A) + B_h relation and in H_G.
+harmonic_field = guide_field
+evolved_harmonic = as_vector([0.0, 0.0, 0.0])
+if is_e3 and periodic:
+    B_init = B_init + harmonic_field
+    guide_field = as_vector([0.0, 0.0, 0.0])
+    evolved_harmonic = harmonic_field
 
 # ============================================================
 # Mixed unknowns
@@ -105,8 +115,7 @@ def form_helicity(A, B):
     periodic:  A·(B + harmonic)                 (generalised helicity)
     """
     if is_e3 and periodic:
-        # B is B_total - B_h in the discrete unknown.
-        return dot(A, B + 2 * guide_field)
+        return dot(A, B + harmonic_field)
     elif is_e3:
         return dot(A, B + 2 * guide_field)
     elif periodic:
@@ -116,13 +125,14 @@ def form_helicity(A, B):
     else:
         return dot(A, B)
 
-# Two-LM weak form — B equation is (B, Bt) - (curl A, Bt) = 0 so B = curl A.
+# Two-LM weak form.  For periodic E3, B is complete and satisfies
+# B = curl(A) + B_h; harmonic_field is zero for the other configurations.
 B_total = B + guide_field
 # Reduced derivative dH/dA.  For E3 periodic,
 # H_G = ∫ A·(B_total + B_h) = ∫ A·(curl(A) + 2B_h).
 helicity_gradient = 2 * (B + guide_field)
 F = (
-      inner(B, Bt) * dx
+      inner(B - evolved_harmonic, Bt) * dx
     - inner(curl(A), Bt) * dx
     + inner((A - Ap)/dt, At) * dx
     + inner(E, At) * dx
@@ -149,7 +159,7 @@ F = (
 B_total_s = B_s + guide_field
 helicity_gradient_s = 2 * (B_s + guide_field)
 F_s = (
-      inner(B_s, B_st) * dx
+      inner(B_s - evolved_harmonic, B_st) * dx
     - inner(curl(A_s), B_st) * dx
     + inner((A_s - A_sp)/dt, A_st) * dx
     + inner(E_s, A_st) * dx
@@ -277,14 +287,9 @@ z_prev.sub(0).project(proj_B0)
 z_prev.sub(2).project(potential_solver_direct(proj_B0))
 z.assign(z_prev)
 
-B_recover = Function(Vd, name="RecoveredMagneticField")
 if output:
     pvd = VTKFile(f"{output_dir}/parker.pvd")
     pvd.write(*z.subfunctions, time=float(t))
-    if is_e3:
-        pvd1 = VTKFile(f"{output_dir}/recover.pvd")
-        B_recover.project(z.sub(0) + B_b)
-        pvd1.write(B_recover, time=float(t))
 
 
 def helicity_solver_setup():
@@ -349,7 +354,7 @@ def compute_helicity(A_func, B_func):
     Diagnostic helicity (matches what the LM enforces in form_helicity).
     """
     if is_e3 and periodic:
-        return assemble(inner(A_func, B_func + 2 * guide_field) * dx)
+        return assemble(inner(A_func, B_func + harmonic_field) * dx)
     elif is_e3:
         return assemble(inner(A_func, B_func + 2 * guide_field) * dx)
     elif periodic:
@@ -362,6 +367,8 @@ def compute_helicity(A_func, B_func):
 
 def compute_relative_helicity(A_func, B_func):
     """Relative helicity; for E3 this is also the LM invariant."""
+    if is_e3 and periodic:
+        return assemble(inner(A_func, B_func + harmonic_field) * dx)
     return assemble(inner(A_func, B_func + 2 * guide_field) * dx)
 
 
@@ -371,8 +378,7 @@ def compute_divB(B_func):
 
 def compute_energy(B_func, A_func):
     if is_e3:
-        B_total = B_func + guide_field
-        return assemble(inner(B_total, B_total) * dx)
+        return assemble(inner(B_func, B_func) * dx)
     elif periodic:
         harmonic = Function(Vd)
         harmonic.project(B_func - curl(A_func))
@@ -382,14 +388,15 @@ def compute_energy(B_func, A_func):
 
 
 def compute_free_energy(B_func):
-    return assemble(inner(B_func, B_func) * dx)
+    perturbation = B_func - harmonic_field if is_e3 and periodic else B_func
+    return assemble(inner(perturbation, perturbation) * dx)
 
 
 def compute_background_energy():
     """Energy of the E3 harmonic field; zero when no E3 field is present."""
     if not is_e3:
         return 0.0
-    return assemble(inner(guide_field, guide_field) * dx(domain=mesh))
+    return assemble(inner(harmonic_field, harmonic_field) * dx(domain=mesh))
 
 
 def compute_lamb(j, B):
@@ -635,9 +642,6 @@ while (float(t) < float(T) - 1.0e-9):
 
     if output:
         pvd.write(*z.subfunctions, time=float(t))
-        if is_e3:
-            B_recover.project(z.sub(0) + B_b)
-            pvd1.write(B_recover, time=float(t))
     z_prev.assign(z)
     z_s_prev.assign(z_s)
     timestep += 1

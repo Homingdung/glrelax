@@ -41,7 +41,14 @@ jump_tau = CONFIG.jump_tau
 
 mesh, spaces = build_mesh_and_spaces(CONFIG)
 Vg, Vg_, Vc, Vd, Vn = (spaces[name] for name in ("Vg", "Vg_", "Vc", "Vd", "Vn"))
-B_init, guide_field, B_b, k_sign = build_initial_condition(mesh, CONFIG)
+B_init, guide_field, _B_b, k_sign = build_initial_condition(mesh, CONFIG)
+
+# E3 is evolved as the complete magnetic field on the z-periodic domain.
+# Keep the harmonic field separately for the generalized-helicity diagnostic.
+harmonic_field = guide_field
+if is_e3 and periodic:
+    B_init = B_init + harmonic_field
+    guide_field = as_vector([0.0, 0.0, 0.0])
 
 # Mixed unknowns: [B, j, u, E]
 Z = MixedFunctionSpace([Vd, Vc, Vc])
@@ -129,14 +136,9 @@ def project_initial_conditions(B_init):
 B_.assign(project_initial_conditions(B_init))
 z_prev.assign(z)
 
-B_recover = Function(Vd, name="RecoveredMagneticField")
 if output:
     pvd = VTKFile(f"{output_dir}/parker.pvd")
     pvd.write(*z.subfunctions, time=float(t))
-    if is_e3 and bc == "closed":
-        pvd1 = VTKFile(f"{output_dir}/recover.pvd")
-        B_recover.project(z.sub(0) + B_b)
-        pvd1.write(B_recover, time=float(t))
 
 def build_linear_solver(a, L, u_sol, bcs, aP=None, solver_parameters = None, options_prefix=None):
     problem = LinearVariationalProblem(a, L, u_sol, bcs=bcs, aP=aP)
@@ -215,20 +217,21 @@ def compute_helicity_energy(B):
         A = ulft
     else:
         A = problem.u
-    diff = norm(curl(A) - B, "L2")
+    potential_field = B - harmonic_field if is_e3 and periodic else B
+    diff = norm(curl(A) - potential_field, "L2")
     if mesh.comm.rank == 0:
-        print(f"magnetic potential: ||curl(A) - B||_L2 = {diff:.8e}", flush=True)
+        print(f"magnetic potential residual = {diff:.8e}", flush=True)
     A_ = Function(Vc, name="MagneticPotential")
     A_.project(A)
     curlA = Function(Vd, name="CurlA")
     curlA.project(curl(A))
     diff_ = Function(Vd, name="CurlAMinusB")
-    diff_.project(B-curlA)
+    diff_.project(potential_field-curlA)
     # VTKFile(f"{output_dir}/magnetic_potential.pvd").write(curlA, diff_, A_)
     if is_e3 and periodic:
-        # A·(B_total + B_h), with B = B_total - B_h in this code.
-        return (assemble(inner(A, B + 2 * guide_field)*dx), diff, diff_,
-                assemble(inner(B + guide_field, B + guide_field) * dx))
+        # B is the complete field and curl(A) is its zero-harmonic part.
+        return (assemble(inner(A, B + harmonic_field)*dx), diff, diff_,
+                assemble(inner(B, B) * dx))
     elif is_e3:
         return (assemble(inner(A, B + 2 * guide_field)*dx), diff, diff_,
                 assemble(inner(B + guide_field, B + guide_field) * dx))
@@ -245,14 +248,15 @@ def compute_divB(B):
     return norm(div(B), "L2")
 
 def compute_free_energy(B):
-    """Energy above the fixed E3 guide field (B is the perturbation)."""
-    return assemble(inner(B, B) * dx)
+    """Energy of the part above the fixed E3 harmonic field."""
+    perturbation = B - harmonic_field if is_e3 and periodic else B
+    return assemble(inner(perturbation, perturbation) * dx)
 
 def compute_background_energy():
     """Energy of the E3 harmonic field; zero when no E3 field is present."""
     if not is_e3:
         return 0.0
-    return assemble(inner(guide_field, guide_field) * dx(domain=mesh))
+    return assemble(inner(harmonic_field, harmonic_field) * dx(domain=mesh))
 
 # monitor of (non)linear force-free field
 def compute_lamb(j, B):
@@ -414,10 +418,6 @@ while (float(t) < float(T) - 1.0e-9):
     if output:
         #if timestep % 10 == 0:
         pvd.write(*z.subfunctions,time=float(t))
-        if is_e3 and bc == "closed":
-            B_b = as_vector([0, 0, 1])
-            B_recover.project(z.sub(0) + B_b)
-            pvd1.write(B_recover, time=float(t))
     timestep += 1
     z_prev.assign(z)
 

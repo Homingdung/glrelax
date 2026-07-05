@@ -294,8 +294,9 @@ def compute_divB(B):
     return norm(div(B), "L2")
 
 def compute_free_energy(B):
-    """Energy above the fixed E3 guide field (B is the perturbation)."""
-    return assemble(inner(B, B) * dx)
+    """Energy of the part above the fixed E3 harmonic field."""
+    perturbation = B - harmonic_field if is_e3 and periodic else B
+    return assemble(inner(perturbation, perturbation) * dx)
 
 def compute_background_energy():
     """Energy of the E3 harmonic field; zero when no E3 field is present."""
