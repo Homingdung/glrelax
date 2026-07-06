@@ -49,6 +49,12 @@ for case_name in "${cases[@]}"; do
     done
 done
 
+initial_relaxation_tex="plot-e3/plot-e3-comparison.tex"
+if [[ ! -f "$initial_relaxation_tex" ]]; then
+    echo "missing: $initial_relaxation_tex" >&2
+    missing=1
+fi
+
 if (( missing )); then
     echo "No PDFs were generated. Add/fix all CSV files, then rerun ./plot-all.sh." >&2
     exit 1
@@ -81,6 +87,13 @@ for case_name in "${cases[@]}"; do
     done
 done
 
+echo "Compiling ${initial_relaxation_tex}"
+(
+    cd plot-e3
+    pdflatex -interaction=nonstopmode -halt-on-error \
+        "$(basename "$initial_relaxation_tex")" >/dev/null
+)
+
 echo "Removing generated intermediate files"
 for case_name in "${cases[@]}"; do
     plot_dir="plot-${case_name}"
@@ -94,6 +107,11 @@ for case_name in "${cases[@]}"; do
         done
     done
 done
+initial_relaxation_stem="${initial_relaxation_tex%.tex}"
+rm -f "${initial_relaxation_stem}.aux" "${initial_relaxation_stem}.log" \
+    "${initial_relaxation_stem}.out" "${initial_relaxation_stem}.toc" \
+    "${initial_relaxation_stem}.fls" "${initial_relaxation_stem}.fdb_latexmk" \
+    "${initial_relaxation_stem}.synctex.gz"
 rmdir errors 2>/dev/null || true
 
-echo "Generated 18 PDFs under the three plot directories; intermediate files removed."
+echo "Generated 19 PDFs under the three plot directories; intermediate files removed."
