@@ -64,13 +64,12 @@ Vg, Vg_, Vc, Vd, Vn, VR = (
 # ============================================================
 B_init, guide_field, _B_b, k_sign = build_initial_condition(mesh, CONFIG)
 
-# E3 is evolved as the complete magnetic field on the z-periodic domain.
-# Its harmonic component cannot be represented by curl(A), so retain that
-# component explicitly in the B = curl(A) + B_h relation and in H_G.
+# B_init already contains the E3 harmonic background on the periodic domain.
+# Since that component cannot be represented by curl(A), retain it explicitly
+# in the B = curl(A) + B_h relation and in H_G.
 harmonic_field = guide_field
 evolved_harmonic = as_vector([0.0, 0.0, 0.0])
 if is_e3 and periodic:
-    B_init = B_init + harmonic_field
     guide_field = as_vector([0.0, 0.0, 0.0])
     evolved_harmonic = harmonic_field
 

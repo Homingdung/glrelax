@@ -9,7 +9,7 @@ mkdir -p "$MPLCONFIGDIR"
 
 #methods=(hdiv mixed lm)
 methods=(hdiv mixed lm)
-initial_conditions=(hopf E3 E3-positive)
+initial_conditions=(E3 E3-positive)
 #initial_conditions=(hopf E3 E3-positive)
 # Complete input combinations (3 methods x 3 initial conditions).
 # Uncomment any command below to run that experiment independently.

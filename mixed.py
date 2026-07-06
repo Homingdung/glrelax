@@ -50,13 +50,10 @@ Vg, Vg_, Vc, Vd, Vn = (spaces[name] for name in ("Vg", "Vg_", "Vc", "Vd", "Vn"))
 B_init, guide_field, B_b, k_sign = build_initial_condition(mesh, CONFIG)
 harmonic_field = guide_field
 
-# On a periodic domain the harmonic (guide-field) component belongs to the
-# evolved magnetic field.  Keeping it outside B would make the projection and
-# midpoint relation evolve only the zero-mean perturbation.  For line-tied
-# boundaries it remains a fixed field and is added where the total field is
-# required.
-if periodic:
-    B_init = B_init + guide_field
+# build_initial_condition has already included the harmonic background in the
+# evolved field on a periodic domain.  Clear the external guide field here so
+# it is not added a second time in the weak form.
+if is_e3 and periodic:
     guide_field = as_vector([0.0, 0.0, 0.0])
 # ============================================================
 # Mixed unknowns: [B, E, j, H]

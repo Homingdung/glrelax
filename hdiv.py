@@ -43,11 +43,10 @@ mesh, spaces = build_mesh_and_spaces(CONFIG)
 Vg, Vg_, Vc, Vd, Vn = (spaces[name] for name in ("Vg", "Vg_", "Vc", "Vd", "Vn"))
 B_init, guide_field, _B_b, k_sign = build_initial_condition(mesh, CONFIG)
 
-# E3 is evolved as the complete magnetic field on the z-periodic domain.
-# Keep the harmonic field separately for the generalized-helicity diagnostic.
+# B_init already contains the E3 harmonic background on the periodic domain.
+# Keep it separately only for the generalized-helicity diagnostic.
 harmonic_field = guide_field
 if is_e3 and periodic:
-    B_init = B_init + harmonic_field
     guide_field = as_vector([0.0, 0.0, 0.0])
 
 # Mixed unknowns: [B, j, u, E]

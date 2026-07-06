@@ -27,6 +27,12 @@ def build_mesh_and_spaces(config, include_real=False):
 
 
 def build_initial_condition(mesh, config):
+    """Build the magnetic field represented by the scheme unknown.
+
+    For periodic E3 configurations the harmonic background field is part of
+    the evolved field and is therefore included in ``B_init``.  For a
+    non-periodic configuration it remains an external fixed field.
+    """
     X, Y, Z = SpatialCoordinate(mesh)
     if config.ic == "hopf":
         w1, w2, s = 3, 2, 1
@@ -50,8 +56,11 @@ def build_initial_condition(mesh, config):
                     - ((Z - z_c[i])**2 / length**2))
         Bx += coeff * ((2 * k * k_sign[i] * B0 / a) * (-Y))
         By += coeff * ((2 * k * k_sign[i] * B0 / a) * (X - x_c[i]))
-    guide = as_vector([0.0, 0.0, B0])
-    return as_vector([Bx, By, B0]) - guide, guide, guide, k_sign
+    perturbation = as_vector([Bx, By, 0.0])
+    background = as_vector([0.0, 0.0, B0])
+    if config.is_e3 and config.periodic:
+        return perturbation + background, background, background, k_sign
+    return perturbation, background, background, k_sign
 
 
 def project_initial_conditions(B_init, Vd, Vn, dirichlet_ids):
