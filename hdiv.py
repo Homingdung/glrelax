@@ -70,8 +70,7 @@ F = (
     - inner(B_avg, curl(jt)) * dx
     # E
     + inner(E_avg, Et) * dx
-    #+ tau * inner(cross(cross(j_avg, B_avg), B_avg)/(dot(Bp, Bp) + eps), Et) * dx
-    + tau * inner(cross(cross(j_avg, B_total_avg), B_total_avg), Et) * dx
+    + tau * inner(cross(cross(j_avg, B_avg), B_avg), Et) * dx
 )
 
 bcs = [DirichletBC(Z.sub(index), 0, subdomain) for index in range(len(Z)) for subdomain in dirichlet_ids]

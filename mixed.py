@@ -75,7 +75,8 @@ F = (
     + inner(curl(E_avg), Bt) * dx
     - inner(B_avg, curl(jt)) * dx
     + inner(j_avg, jt) * dx
-    - tau * inner(cross(Et, H_total), cross(j_avg, H_total)) * dx
+    #- tau * inner(cross(Et, H_total), cross(j_avg, H_total)) * dx
+    - tau * inner(cross(Et, H_avg), cross(j_avg, H_avg)) * dx
     + inner(E_avg, Et) * dx
     + inner(H_avg, Ht) * dx
     - inner(B_avg, Ht) * dx
